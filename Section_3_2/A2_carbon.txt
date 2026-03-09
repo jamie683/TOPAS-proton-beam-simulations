@@ -1,0 +1,57 @@
+# =========================
+# RUN CONTROL
+# =========================
+i:Ts/NumberOfThreads = 0
+i:So/Beam/NumberOfHistoriesInRun = 30000
+#s:Gr/ViewA/Type = "OpenGL" # set up graphics
+#b:Ts/UseQt = "True"
+i:Ts/Seed = 1
+
+# =========================
+# GEOMETRY
+# =========================
+
+# World
+s:Ge/World/Type = "TsBox"
+d:Ge/World/HLX = 500 mm
+d:Ge/World/HLY = 500 mm
+d:Ge/World/HLZ = 500 mm
+s:Ge/World/Material = "G4_AIR"
+
+# Water Phantom
+s:Ge/Phantom/Type = "TsBox"
+s:Ge/Phantom/Parent = "World"
+d:Ge/Phantom/HLX = 100 mm
+d:Ge/Phantom/HLY = 100 mm
+d:Ge/Phantom/HLZ = 200 mm
+d:Ge/Phantom/TransZ = 200 mm
+s:Ge/Phantom/Material = "G4_WATER"
+
+# =========================
+# SOURCE: Proton Beam
+# =========================
+
+s:So/Beam/Type = "Beam"
+s:So/Beam/Component = "World"
+
+s:So/Beam/BeamParticle = "GenericIon(6,12)"
+d:So/Beam/BeamEnergy = 5102 MeV
+u:So/Beam/BeamEnergySpread = 0
+s:So/Beam/BeamAngularDistribution = "None"
+s:So/Beam/BeamPositionDistribution = "None"
+
+# =========================
+# SCORER (Depth-Dose Bins)
+# =========================
+#s:Sc/Dose/Type = "TsBox"
+s:Sc/Dose/Quantity = "DoseToMedium"
+s:Sc/Dose/Component = "Phantom"
+b:Sc/Dose/IncludeHeader = "True"
+s:Sc/Dose/OutputFile = "DoseZ"
+s:Sc/Dose/IfOutputFileAlreadyExists = "Overwrite"
+s:Sc/Dose/OutputType = "csv"
+b:Sc/Dose/Active = "True"
+
+i:Sc/Dose/XBins = 1
+i:Sc/Dose/YBins = 1
+i:Sc/Dose/ZBins = 800
