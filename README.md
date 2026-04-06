@@ -1,131 +1,138 @@
-PHY4004 Medical Radiation Simulation – Monte Carlo Code Repository
+# PHY4004 Medical Radiation Simulation
 
-This repository contains the simulation input files and analysis scripts used for Assignments 1 and 2 of the PHY4004 Medical Radiation Physics module at Queen’s University Belfast.
+This repository contains simulation input files and analysis scripts for **Assignments 1 and 2** of the *PHY4004 Medical Radiation Physics* module at Queen’s University Belfast.
 
-All simulations were performed using the TOPAS Monte Carlo toolkit (Geant4-based), with Python used for analysis, optimisation, and post-processing.
+Simulations were performed using the **TOPAS Monte Carlo toolkit (Geant4-based)**, with Python used for analysis, optimisation, and post-processing.
 
-The work spans both fundamental particle transport physics (Assignment 1) and applied radiotherapy treatment planning in a patient geometry (Assignment 2).
+---
 
---------------------------------------------------------------------------------
+## Overview
 
-Assignment 1 – Particle Transport in Water and Heterogeneous Media
+The work spans:
 
-Assignment 1 investigates fundamental physical processes relevant to charged particle therapy, including:
+- **Assignment 1:** Fundamental charged particle transport physics  
+- **Assignment 2:** Radiotherapy treatment planning in a patient CT geometry  
 
-- Bragg peak formation for proton beams
-- Water Equivalent Thickness (WET) of heterogeneous inserts
-- Energy matching between proton and carbon ion beams
-- Multiple Coulomb scattering and beam broadening
-- Radial energy deposition distributions
+This repository is intended to support **reproducibility** of all simulations and analysis workflows used in the accompanying reports.
 
-Repository Structure (Assignment 1):
+---
 
+## Assignment 1 — Particle Transport Physics
+
+This assignment investigates key physical processes relevant to particle therapy:
+
+- Bragg peak formation (protons)
+- Water Equivalent Thickness (WET)
+- Proton vs carbon ion energy matching
+- Multiple Coulomb scattering
+- Beam broadening and radial dose distribution
+
+### Structure
+
+```
 Assignment_1/
-
-├── section_3_1/
-│   Proton depth-dose simulation in water
-├── section_3_2/
-│   Carbon energy matching using a bisection search
-├── section_3_3/
-│   Water equivalent thickness (WET) calculation
-├── section_3_4/
-│   Stopping power comparison and interpretation
-├── section_3_5/
-│   Radial scattering analysis for aluminium inserts
-└── section_3_6/
-    Lead thickness matching and beam broadening analysis
-
-Each folder contains:
-- TOPAS parameter files (.txt)
-- Python scripts for analysis and plotting
-
---------------------------------------------------------------------------------
-
-Assignment 2 – Radiotherapy Treatment Planning in Patient Geometry
-
-Assignment 2 extends these principles to clinically relevant treatment planning using a patient CT dataset and RT structure set.
-
-Key physical and computational components include:
-
-- CT-based patient geometry import (DICOM)
-- HU → relative stopping power calibration (Schneider method)
-- Photon multi-field treatment planning
-- Monoenergetic proton beam modelling
-- Water-equivalent path length (WEPL) calculation
-- Spread-Out Bragg Peak (SOBP) construction using NNLS optimisation
-- Energy spread optimisation and plateau flatness analysis
-- Lateral beam-width optimisation in patient geometry
-- Pencil Beam Scanning (PBS) dose modelling
-- Motion and interplay effects in PBS delivery
-- Neutron production in proton therapy configurations
-
-Repository Structure (Assignment 2):
-
-Assignment_2/
-
-├── CTData/
-│   Patient DICOM CT and RTStruct files
-├── A2_1 → A2_5/
-│   Geometry setup, beam alignment, DVHs, photon and monoenergetic proton plans
-├── A2_6/
-│   WEPL-based SOBP construction and optimisation
-├── A2_7/
-│   Neutron production study
-├── A2_8/
-│   Pencil Beam Scanning (PBS) implementation
-├── A2_9/
-│   Motion and interplay effects in PBS
+├── section_3_1/   # Proton depth-dose in water
+├── section_3_2/   # Carbon energy matching
+├── section_3_3/   # WET calculation
+├── section_3_4/   # Stopping power analysis
+├── section_3_5/   # Radial scattering (Al inserts)
+└── section_3_6/   # Lead thickness & beam broadening
+```
 
 Each section contains:
-- TOPAS parameter files
-- Python workflows for optimisation and analysis
-- Output plots and summary tables (where applicable)
+- TOPAS parameter files (`.txt`)
+- Python analysis scripts
 
---------------------------------------------------------------------------------
+---
 
-Software Requirements
+## Assignment 2 — Radiotherapy Treatment Planning
 
-The simulations require:
+Assignment 2 applies these principles to a **patient CT dataset**, including treatment planning and evaluation.
 
-- TOPAS Monte Carlo Toolkit
-- Geant4 (via TOPAS)
+### Key components
+
+- CT import and material calibration (HU → RSP)
+- Photon multi-field treatment planning
+- Monoenergetic proton beams
+- WEPL-based range calculation
+- SOBP construction (NNLS optimisation)
+- Energy spread optimisation
+- Lateral beam-width optimisation
+- Pencil Beam Scanning (PBS)
+- Motion & interplay effects
+- Neutron production analysis
+
+### Structure
+
+```
+Assignment_2/
+├── CTData/        # Patient CT + RTStruct
+├── A2_1–A2_5/     # Geometry, photons, monoenergetic protons
+├── A2_6/          # SOBP construction & optimisation
+├── A2_7/          # Neutron production
+├── A2_8/          # PBS implementation
+└── A2_9/          # Motion & interplay
+```
+
+Each section contains:
+- TOPAS input files
+- Python workflows
+- Generated plots and DVHs
+
+---
+
+## Software Requirements
+
+### Core
+- TOPAS (Geant4-based)
+- Geant4 data libraries
+
+### Python
 - Python 3
-
-Python libraries used:
-
 - numpy
 - matplotlib
 - scipy
-- pathlib
-- subprocess
-- csv
-- re
 
---------------------------------------------------------------------------------
+---
 
-Reproducibility
+## Reproducibility
 
-The Python scripts automate the full simulation workflow by:
+The Python scripts automate:
 
-- Generating and modifying TOPAS parameter files
-- Executing simulations via the TOPAS command line
-- Parsing simulation outputs
-- Computing physical quantities (e.g. Bragg peak depth, WEPL, DVH metrics)
-- Performing optimisation (e.g. NNLS for SOBP, beam-width sweeps, PBS spot weighting)
-- Producing plots used in the accompanying reports
+- TOPAS file generation
+- Simulation execution
+- Output parsing
+- Physical quantity extraction (Bragg peak, WEPL, DVHs)
+- Optimisation (NNLS, beam-width sweeps, PBS weighting)
+- Plot generation
 
---------------------------------------------------------------------------------
+Run scripts from the project root where possible:
 
-Associated Reports
+```bash
+python3 Assignment_2/A2_6/sobp_proton.py
+```
 
-The full scientific discussion, figures, and interpretation are presented in the Assignment 1 and Assignment 2 reports.
+---
 
-This repository contains only the simulation inputs and analysis code used to generate those results.
+## Notes
 
---------------------------------------------------------------------------------
+- Dose is often **normalised to maximum dose** in DVH plots
+- SOBP design uses **WEPL**, not geometric depth
+- PBS introduces **temporal effects** (motion interplay)
+- This is research/assignment code — not clinical software
 
-Author
+---
 
-Jamie McAteer  
+## Reports
+
+This repository contains **code only**.
+
+Full results, figures, and discussion are presented in the submitted assignment reports.
+
+---
+
+## Author
+
+**Jamie McAteer**  
 MSci Physics with Astrophysics  
 Queen's University Belfast
