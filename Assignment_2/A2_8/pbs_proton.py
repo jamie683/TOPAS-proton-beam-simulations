@@ -95,7 +95,7 @@ PBS_HISTORIES = 500000        # total for PBS verification run
 ENERGY_SPREAD = 0.01          # 1% fractional spread
 
 # Skip TOPAS if True — produce analytical-only results
-SKIP_TOPAS = False
+SKIP_TOPAS = True
 
 # Passive scattering results directory (for comparison)
 PASSIVE_DIR = os.path.join(PROJECT_ROOT, "A2_6", "output")
@@ -1424,6 +1424,14 @@ def main():
             pbs_dose = {k: v * scale for k, v in pbs_dose.items()}
             print(f"  Normalised dose: GTV mean → {PRESCRIPTION_GY:.0f} Gy "
                   f"(scale factor = {scale:.2f})")
+
+    # Save analytical dose as CSV for comparison plots
+    ana_csv = os.path.join(OUTPUT_DIR, "dose_pbs_analytical.csv")
+    with open(ana_csv, "w") as _f:
+        _f.write("# Analytical PBS dose (normalised to 60 Gy GTV mean)\n")
+        for (ix, iy, iz), dose_val in sorted(pbs_dose.items()):
+            _f.write(f"{ix},{iy},{iz},{dose_val}\n")
+    print(f"  Saved analytical dose: {ana_csv}")
 
     pbs_metrics = compute_dvh_metrics(pbs_dose, masks)
 
