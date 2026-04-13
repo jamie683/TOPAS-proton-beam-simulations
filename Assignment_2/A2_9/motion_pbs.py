@@ -50,8 +50,17 @@ try:
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from matplotlib.patches import Polygon as MplPolygon
+    from matplotlib.lines import Line2D
 except Exception as exc:
     raise RuntimeError(f"matplotlib required: {exc}")
+
+try:
+    import pydicom
+except ImportError:
+    import subprocess as _sp
+    _sp.check_call([sys.executable, "-m", "pip", "install", "pydicom"])
+    import pydicom
 
 # Import from 2.8
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -297,7 +306,9 @@ def plot_dvh_motion(curves, masks, geom, filepath):
         ("tumour", "red", "GTV"),
         ("heart", "blue", "Heart"),
         ("cord", "green", "Cord"),
+        ("ptv", "magenta", "PTV"),
         ("lung_r", "orange", "Lung R"),
+        ("lung_l", "cyan", "Lung L"),
     ]
     style_for = {
         "static": ("-", 2.2),
@@ -408,6 +419,114 @@ def plot_d95_vs_phase(phases, d95_values, static_d95, filepath):
     print(f"  Saved: {filepath}")
 
 
+CONTOUR_NUDGE_PX = 0.5
+CONTOUR_COLOURS = {
+    "GTVp": "red", "GTV": "red", "PTV": "magenta",
+    "Lung_R": "orange", "Lung_L": "cyan", "Heart": "blue",
+    "SpinalCord": "green", "Body": "grey", "BODY": "grey",
+    "External": "grey", "EXTERNAL": "grey",
+}
+CONTOUR_ORDER = [
+    "Body", "BODY", "External", "EXTERNAL",
+    "Lung_R", "Lung_L", "Heart", "SpinalCord", "PTV", "GTVp", "GTV",
+]
+CT_DIR = os.path.join(PROJECT_ROOT, "CTData")
+
+
+def _find_rtstruct():
+    for fname in sorted(os.listdir(CT_DIR)):
+        if not fname.lower().endswith(".dcm"):
+            continue
+        try:
+            ds = pydicom.dcmread(os.path.join(CT_DIR, fname),
+                                 stop_before_pixels=True)
+            if getattr(ds, "Modality", "") == "RTSTRUCT":
+                return os.path.join(CT_DIR, fname)
+        except Exception:
+            pass
+    return None
+
+
+def _load_contour_polygons(geom, slice_iz):
+    rtstruct_path = _find_rtstruct()
+    if not rtstruct_path:
+        return {}
+    ds = pydicom.dcmread(rtstruct_path)
+    roi_map = {}
+    for roi in getattr(ds, "StructureSetROISequence", []):
+        roi_map[int(roi.ROINumber)] = str(roi.ROIName)
+    contours = {}
+    for roi_contour in getattr(ds, "ROIContourSequence", []):
+        roi_number = int(getattr(roi_contour, "ReferencedROINumber", -1))
+        roi_name = roi_map.get(roi_number)
+        if not roi_name or not hasattr(roi_contour, "ContourSequence"):
+            continue
+        for contour in roi_contour.ContourSequence:
+            data = np.asarray(getattr(contour, "ContourData", []), dtype=float)
+            if data.size < 9:
+                continue
+            pts = data.reshape(-1, 3)
+            z_mean = float(np.mean(pts[:, 2]))
+            iz = int(np.argmin(np.abs(np.array(geom["slice_zs"]) - z_mean)))
+            if iz != slice_iz:
+                continue
+            contours.setdefault(roi_name, []).append(pts[:, :2])
+    return contours
+
+
+def _load_ct_slice_hu(geom, iz):
+    target_z = geom["slice_zs"][iz]
+    for fname in sorted(os.listdir(CT_DIR)):
+        if not fname.lower().endswith(".dcm"):
+            continue
+        ds = pydicom.dcmread(os.path.join(CT_DIR, fname))
+        if getattr(ds, "Modality", "") != "CT":
+            continue
+        if abs(float(ds.ImagePositionPatient[2]) - target_z) < 0.1:
+            slope = float(getattr(ds, "RescaleSlope", 1.0))
+            intercept = float(getattr(ds, "RescaleIntercept", 0.0))
+            return ds.pixel_array.astype(float) * slope + intercept
+    return None
+
+
+def _slice_extent(geom):
+    dx, dy = geom["dx"], geom["dy"]
+    x_min = geom["x0"] - dx / 2
+    x_max = geom["x0"] + (geom["cols"] - 0.5) * dx
+    y_min = geom["y0"] - dy / 2
+    y_max = geom["y0"] + (geom["rows"] - 0.5) * dy
+    return [x_min, x_max, y_min, y_max]
+
+
+def _draw_contours(ax, contour_polys, geom):
+    shift = np.array([geom["dx"] * CONTOUR_NUDGE_PX,
+                      geom["dy"] * CONTOUR_NUDGE_PX])
+    drawn = set()
+    legend_handles = []
+    for name in CONTOUR_ORDER:
+        if name in contour_polys and name not in drawn:
+            colour = CONTOUR_COLOURS.get(name, "white")
+            for poly_xy in contour_polys[name]:
+                ax.add_patch(MplPolygon(
+                    poly_xy + shift, closed=True, fill=False,
+                    edgecolor=colour, linewidth=1.3))
+            legend_handles.append(
+                Line2D([], [], color=colour, linewidth=1.3, label=name))
+            drawn.add(name)
+    for name, polys in contour_polys.items():
+        if name not in drawn:
+            colour = CONTOUR_COLOURS.get(name, "white")
+            for poly_xy in polys:
+                ax.add_patch(MplPolygon(
+                    poly_xy + shift, closed=True, fill=False,
+                    edgecolor=colour, linewidth=1.3))
+            legend_handles.append(
+                Line2D([], [], color=colour, linewidth=1.3, label=name))
+    if legend_handles:
+        ax.legend(handles=legend_handles, loc="upper right", fontsize=6,
+                  frameon=True, framealpha=0.8, edgecolor="grey")
+
+
 def plot_dose_map_motion(static_flat, interplay_flat, geom, gtv, filepath):
     n_cols, n_rows, n_slices = geom["cols"], geom["rows"], geom["n_slices"]
     iz = n_slices // 2
@@ -418,42 +537,43 @@ def plot_dose_map_motion(static_flat, interplay_flat, geom, gtv, filepath):
     if dmax <= 0:
         dmax = 1.0
 
-    xs = geom["x0"] + (np.arange(n_cols) + 0.5) * geom["dx"]
-    ys = geom["y0"] + (np.arange(n_rows) + 0.5) * geom["dy"]
-
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4.5))
     static_slice = static_3d[iz]
     interp_slice = interp_3d[iz]
     diff = interp_slice - static_slice
 
-    extent = [xs[0], xs[-1], ys[-1], ys[0]]
-    im0 = axes[0].imshow(static_slice, extent=extent, vmin=0, vmax=dmax,
-                         cmap="viridis", aspect="equal")
-    axes[0].set_title("Static PBS dose")
-    im1 = axes[1].imshow(interp_slice, extent=extent, vmin=0, vmax=dmax,
-                         cmap="viridis", aspect="equal")
-    axes[1].set_title("Single-fraction interplay")
-    vabs = max(abs(diff.min()), abs(diff.max()))
-    im2 = axes[2].imshow(diff, extent=extent, vmin=-vabs, vmax=vabs,
-                         cmap="seismic", aspect="equal")
-    axes[2].set_title("Interplay − Static")
+    # CT background + vector contours (matching plot_uncertainty_slices.py)
+    hu_image = _load_ct_slice_hu(geom, iz)
+    contour_polys = _load_contour_polygons(geom, iz)
+    extent = _slice_extent(geom)
 
-    # GTV box
-    for ax in axes:
-        ax.add_patch(plt.Rectangle(
-            (gtv["x_min"], gtv["y_min"]),
-            gtv["x_max"] - gtv["x_min"],
-            gtv["y_max"] - gtv["y_min"],
-            fill=False, edgecolor="white", lw=1.2))
+    fig, axes = plt.subplots(1, 3, figsize=(16, 5.2))
+
+    for ax_idx, (dose_slice, title, cmap, vmin, vmax) in enumerate([
+        (static_slice, "Static PBS dose", "jet", 0, dmax),
+        (interp_slice, "Single-fraction interplay", "jet", 0, dmax),
+        (diff, "Interplay \u2212 Static",
+         "seismic", -max(abs(diff.min()), abs(diff.max())),
+         max(abs(diff.min()), abs(diff.max()))),
+    ]):
+        ax = axes[ax_idx]
+        if hu_image is not None:
+            ax.imshow(hu_image, cmap="gray", extent=extent, origin="lower",
+                      vmin=-400, vmax=400, aspect="equal")
+        dose_masked = np.ma.masked_where(
+            np.abs(dose_slice) < 0.02 * dmax, dose_slice)
+        im = ax.imshow(dose_masked, cmap=cmap, extent=extent, origin="lower",
+                       alpha=0.55, vmin=vmin, vmax=vmax, aspect="equal")
+        _draw_contours(ax, contour_polys, geom)
+        ax.invert_yaxis()
+        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="Gy")
         ax.set_xlabel("X (mm)"); ax.set_ylabel("Y (mm)")
+        ax.set_title(title)
 
-    fig.colorbar(im0, ax=axes[0], fraction=0.046, pad=0.04)
-    fig.colorbar(im1, ax=axes[1], fraction=0.046, pad=0.04)
-    fig.colorbar(im2, ax=axes[2], fraction=0.046, pad=0.04)
-    fig.suptitle(f"Axial slice iz={iz} — cold/hot spots from PBS interplay",
+    target_z = geom["slice_zs"][iz]
+    fig.suptitle(f"Axial slice Z={target_z:.1f} mm — PBS interplay effects",
                  fontsize=12)
     fig.tight_layout()
-    fig.savefig(filepath, dpi=300, bbox_inches="tight")
+    fig.savefig(filepath, dpi=400, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {filepath}")
 
@@ -607,7 +727,7 @@ def main():
 
     # ---- DVH metrics + plots ----
     print("\n[G] Computing DVH metrics ...")
-    structures_to_report = ["tumour", "heart", "cord", "lung_r", "body"]
+    structures_to_report = ["tumour", "ptv", "heart", "cord", "lung_r", "lung_l", "body"]
 
     def per_struct(flat):
         out = {}
@@ -627,15 +747,16 @@ def main():
     # Full summary table (all scenarios, all structures)
     print(f"\n  {'Label':<20s} {'GTV mean':>10s} {'GTV D95':>10s} "
           f"{'GTV D02':>10s} {'Heart mean':>12s} {'Cord max':>10s} "
-          f"{'Lung_R mean':>12s}")
-    print("  " + "-" * 90)
+          f"{'Lung_R mean':>12s} {'Lung_L mean':>12s}")
+    print("  " + "-" * 104)
     for label, ps in all_metrics.items():
         gt = ps.get("tumour", {"mean": 0, "D95": 0, "D02": 0})
         he = ps.get("heart", {"mean": 0}); co = ps.get("cord", {"max": 0})
         lu = ps.get("lung_r", {"mean": 0})
+        ll = ps.get("lung_l", {"mean": 0})
         print(f"  {label:<20s} {gt['mean']:10.3f} {gt['D95']:10.3f} "
               f"{gt['D02']:10.3f} {he['mean']:12.3f} {co['max']:10.3f} "
-              f"{lu['mean']:12.3f}")
+              f"{lu['mean']:12.3f} {ll['mean']:12.3f}")
 
     # Curves to overlay on DVH
     curves = {
@@ -678,16 +799,16 @@ def main():
         os.path.join(OUTPUT_DIR, "scenario_comparison.png"))
 
     # Clean report-ready scenario summary CSV
-    def _lung_mean(flat):
-        if "lung_r" in masks and masks["lung_r"]:
+    def _lung_mean(flat, key="lung_r"):
+        if key in masks and masks[key]:
             return float(np.mean(
-                structure_dose_array(flat, masks["lung_r"], geom)))
+                structure_dose_array(flat, masks[key], geom)))
         return 0.0
     scen_csv = os.path.join(OUTPUT_DIR, "scenario_summary.csv")
     with open(scen_csv, "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["scenario", "GTV_mean", "GTV_D95", "GTV_D50", "GTV_D02",
-                    "GTV_CoV", "Lung_R_mean"])
+                    "GTV_CoV", "Lung_R_mean", "Lung_L_mean"])
         summary_rows = [("static", static_flat),
                         ("interplay_worst", interplay_flat),
                         ("fractionated", fractionated)] + \
@@ -698,7 +819,9 @@ def main():
             w.writerow([label,
                         f"{st['mean']:.4f}", f"{st['D95']:.4f}",
                         f"{st['D50']:.4f}", f"{st['D02']:.4f}",
-                        f"{_gtv_cov(flat):.4f}", f"{_lung_mean(flat):.4f}"])
+                        f"{_gtv_cov(flat):.4f}",
+                        f"{_lung_mean(flat, 'lung_r'):.4f}",
+                        f"{_lung_mean(flat, 'lung_l'):.4f}"])
     print(f"  Saved: {scen_csv}")
 
     # GTV-focused CoV/D95/D50 table (direct scenario comparison)
@@ -727,18 +850,17 @@ def main():
     # --- Key results comparison (4 headline scenarios) ---
     print("\n  KEY RESULTS — GTV motion metrics + ipsilateral lung")
     print(f"    {'scenario':<20s} {'CoV':>8s} {'D95':>8s} {'D50':>8s} "
-          f"{'Lung_R mean':>12s}")
-    print("    " + "-" * 60)
+          f"{'Lung_R mean':>12s} {'Lung_L mean':>12s}")
+    print("    " + "-" * 74)
     key_labels = ["static", "interplay_worst", "fractionated", "rescan_M10"]
     key_flats = [static_flat, interplay_flat, fractionated, rescan_examples[10]]
     for label, flat in zip(key_labels, key_flats):
         st = dvh_stats(flat, masks["tumour"], geom)
-        lu_mean = 0.0
-        if "lung_r" in masks and masks["lung_r"]:
-            lu_mean = float(np.mean(
-                structure_dose_array(flat, masks["lung_r"], geom)))
+        lu_r_mean = _lung_mean(flat, "lung_r")
+        lu_l_mean = _lung_mean(flat, "lung_l")
         print(f"    {label:<20s} {gtv_cov(flat):8.4f} "
-              f"{st['D95']:8.3f} {st['D50']:8.3f} {lu_mean:12.3f}")
+              f"{st['D95']:8.3f} {st['D50']:8.3f} "
+              f"{lu_r_mean:12.3f} {lu_l_mean:12.3f}")
 
     # --- Interpretation notes ---
     d95_drop = 0.0
