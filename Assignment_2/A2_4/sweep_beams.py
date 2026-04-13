@@ -55,8 +55,13 @@ PATIENT_Y_MAX = 150.0
 
 # Beam model tied to the manually verified setup.
 BEAM_ENERGY = 1.0
-BEAM_POS_X = 5.0
-BEAM_POS_Y = 5.0
+# Flat ellipse aperture at the source. The *effective* radius is chosen
+# per-candidate by compute_beam_width() so that adjacent beams don't overlap
+# at the patient entry plane. These globals act as floor / hard-cap only.
+BEAM_POS_HARD_CAP = 17.0   # mm — never exceed GTV radius (15) + 2 mm margin
+BEAM_POS_FLOOR    = 3.0    # mm — don't collapse to a pencil
+BEAM_POS_MARGIN   = 2.0    # mm — gap between adjacent beam circles at entry
+PATIENT_ENTRY_Y   = 80.0   # mm — anterior body surface (posterior-anterior beams)
 BEAM_ANG_CUTOFF = 5.0
 BEAM_ANG_SPREAD = 0.5
 
@@ -95,14 +100,17 @@ WEIGHT_GRID_4BEAM_GROUP = np.linspace(0.35, 0.65, 7)
 STRUCTURE_ALIASES = {
     'tumour': ['GTVp', 'GTV', 'Tumour', 'Tumor'],
     'lung_r': ['Lung_R', 'Right Lung', 'LungR', 'Rt Lung'],
+    'lung_l': ['Lung_L', 'Left Lung', 'LungL', 'Lt Lung'],
     'heart': ['Heart'],
     'cord': ['SpinalCord', 'Spinal Cord', 'Cord'],
+    'ptv':  ['PTV'],
     'body': ['Body', 'External', 'BODY', 'EXTERNAL'],
 }
 
 # Fallback masks if RTStruct parsing is unavailable.
 FALLBACK_BOXES = {
     'lung_r': {'x': (-20.0, 150.0), 'y': (-80.0, 40.0), 'z': (-30.0, 30.0)},
+    'lung_l': {'x': (50.0, 200.0), 'y': (-80.0, 40.0), 'z': (-30.0, 30.0)},
     'heart': {'x': (-55.0, 20.0), 'y': (-15.0, 55.0), 'z': (-30.0, 30.0)},
     'cord': {'x': (-12.0, 12.0), 'y': (-95.0, -55.0), 'z': (-25.0, 25.0)},
 }
@@ -112,7 +120,7 @@ OBJECTIVE_WEIGHTS = {
     'tumour_D95': 1.35,
     'tumour_std': 0.25,
     'lung_r_mean': 0.00,
-    'heart_mean': 0.30,
+    'heart_mean': 1.00,
     'cord_D02': 0.70,
     'body_mean': 0.35,
 }
@@ -144,6 +152,42 @@ def convergence_angle(dx, trans_y=None):
     if depth <= 0:
         return 0.0
     return float(np.degrees(np.arctan(dx / depth)))
+
+
+def beam_axis_x_at_y(beam, y_plane):
+    """X position of a beam's central axis where it crosses y = y_plane.
+
+    Beams are aimed from their source at (TransX, TransY) back toward the
+    tumour centre at (TUMOUR_X, TUMOUR_Y). Linear interpolation between
+    source and target gives the axis at any intermediate Y plane.
+    """
+    src_x = beam['TransX']
+    src_y = beam['TransY']
+    denom = src_y - TUMOUR_Y
+    if denom <= 0:
+        return src_x
+    t = (src_y - y_plane) / denom  # 0 at source, 1 at tumour
+    return src_x + (TUMOUR_X - src_x) * t
+
+
+def compute_beam_width(beam_params, y_entry=PATIENT_ENTRY_Y,
+                       margin=BEAM_POS_MARGIN, hard_cap=BEAM_POS_HARD_CAP,
+                       floor=BEAM_POS_FLOOR):
+    """Largest flat-aperture radius (mm) that keeps adjacent beam circles
+    from overlapping at the patient entry plane.
+
+    For 1 beam: return hard_cap (no overlap to worry about).
+    For >=2 beams: find min pairwise axis separation at y_entry, return
+    half of it minus margin, clipped to [floor, hard_cap].
+    """
+    if len(beam_params) <= 1:
+        return float(hard_cap)
+    xs_entry = [beam_axis_x_at_y(b, y_entry) for b in beam_params]
+    xs_sorted = sorted(xs_entry)
+    gaps = [xs_sorted[i + 1] - xs_sorted[i] for i in range(len(xs_sorted) - 1)]
+    min_gap = min(gaps)
+    allowed = 0.5 * min_gap - margin
+    return float(max(floor, min(hard_cap, allowed)))
 
 
 def verify_source_outside_patient(geom):
@@ -230,13 +274,17 @@ def histories_from_weights(n_histories, weights):
 
 
 def generate_topas_file(beam_params, weights, config_label, output_basename,
-                        n_histories, output_type='csv', seed=None):
+                        n_histories, output_type='csv', seed=None,
+                        beam_pos_mm=None):
     counts, weights = histories_from_weights(n_histories, weights)
+    if beam_pos_mm is None:
+        beam_pos_mm = compute_beam_width(beam_params)
 
     lines = [
         f'# AUTO-GENERATED: {config_label}',
         '# Verified basis: dose_scoring.txt posterior geometry.',
         '# Hardcoded for now: TransY=200 mm, RotX=-90 deg, RotZ=0 deg.',
+        f'# Beam aperture radius = {beam_pos_mm:.2f} mm (auto, non-overlap at y={PATIENT_ENTRY_Y:.0f} mm)',
         '# Only TransX and RotY are optimised here.',
         'includeFile = ct_geometry.txt',
         '',
@@ -273,8 +321,8 @@ def generate_topas_file(beam_params, weights, config_label, output_basename,
             f'i:So/{name}/NumberOfHistoriesInRun   = {nh}',
             f's:So/{name}/BeamPositionDistribution = "Flat"',
             f's:So/{name}/BeamPositionCutoffShape  = "Ellipse"',
-            f'd:So/{name}/BeamPositionCutoffX      = {BEAM_POS_X:.1f} mm',
-            f'd:So/{name}/BeamPositionCutoffY      = {BEAM_POS_Y:.1f} mm',
+            f'd:So/{name}/BeamPositionCutoffX      = {beam_pos_mm:.2f} mm',
+            f'd:So/{name}/BeamPositionCutoffY      = {beam_pos_mm:.2f} mm',
             f's:So/{name}/BeamAngularDistribution  = "Gaussian"',
             f'd:So/{name}/BeamAngularCutoffX       = {BEAM_ANG_CUTOFF:.1f} deg',
             f'd:So/{name}/BeamAngularCutoffY       = {BEAM_ANG_CUTOFF:.1f} deg',
@@ -448,7 +496,7 @@ def contour_to_mask_slice(geom, iz, contour_xy):
 
     xv, yv = np.meshgrid(xs[ixs], ys[iys], indexing='xy')
     points = np.column_stack([xv.ravel(), yv.ravel()])
-    inside = path.contains_points(points, radius=1e-9)
+    inside = path.contains_points(points, radius=0.5)
 
     voxels = set()
     inside_grid = inside.reshape(len(iys), len(ixs))
@@ -511,7 +559,7 @@ def build_structure_masks(geom):
 
     # Fallbacks if RTStruct is missing or a requested structure was not found.
     exclude = masks['tumour']
-    for key in ('lung_r', 'heart', 'cord'):
+    for key in ('lung_r', 'lung_l', 'heart', 'cord'):
         if key not in masks or not masks[key]:
             box = FALLBACK_BOXES[key]
             masks[key] = build_box_mask(geom, box['x'], box['y'], box['z'], exclude=exclude)
@@ -652,18 +700,20 @@ def beam_signature(beam_params):
 
 def evaluate_candidate(n_beams, beam_params, weights, label_suffix, masks, search_dir,
                        n_histories=SWEEP_HISTORIES, seed=SWEEP_SEED):
+    beam_pos_mm = compute_beam_width(beam_params)
     stem = f'{label_suffix}_' + '_'.join(
         f'x{b["TransX"]:+06.1f}_r{b["RotY"]:+05.1f}_ty{b["TransY"]:.0f}' for b in beam_params
-    ) + '_' + '_'.join(f'w{i+1}{100*x:05.1f}' for i, x in enumerate(weights))
+    ) + f'_bw{beam_pos_mm:04.1f}' + '_' + '_'.join(f'w{i+1}{100*x:05.1f}' for i, x in enumerate(weights))
     basename = os.path.join('A2_4', 'output', search_dir, stem.replace(' ', ''))
     param_file = generate_topas_file(
         beam_params=beam_params,
         weights=weights,
-        config_label=f'{n_beams}-beam params={beam_signature(beam_params)} weights={weights}',
+        config_label=f'{n_beams}-beam params={beam_signature(beam_params)} weights={weights} beam_pos={beam_pos_mm:.2f}mm',
         output_basename=basename,
         n_histories=n_histories,
         output_type='csv',
         seed=seed,
+        beam_pos_mm=beam_pos_mm,
     )
     run_topas(param_file)
     csv_path = os.path.join(PROJECT_ROOT, basename + '.csv')
@@ -673,6 +723,7 @@ def evaluate_candidate(n_beams, beam_params, weights, label_suffix, masks, searc
         'n_beams': n_beams,
         'beam_params': beam_params,
         'weights': [float(x) for x in weights],
+        'beam_pos_mm': float(beam_pos_mm),
         'metrics': metrics,
         'score': float(score),
         'csv_path': csv_path,
@@ -823,6 +874,7 @@ def write_results_csv(n_beams, results):
             'n_beams': r['n_beams'],
             'beam_signature': beam_signature(r['beam_params']),
             'weights': ';'.join(f'{w:.4f}' for w in r['weights']),
+            'beam_pos_mm': r.get('beam_pos_mm', 0.0),
             'score': r['score'],
             'csv_path': r['csv_path'],
         }
@@ -874,11 +926,12 @@ def generate_production_file(n_beams, best):
     tmp = generate_topas_file(
         beam_params=best['beam_params'],
         weights=best['weights'],
-        config_label=f'Optimised {n_beams}-beam plan | params={beam_signature(best["beam_params"])} | weights={best["weights"]}',
+        config_label=f'Optimised {n_beams}-beam plan | params={beam_signature(best["beam_params"])} | weights={best["weights"]} | beam_pos={best.get("beam_pos_mm", 0.0):.2f}mm',
         output_basename=basename,
         n_histories=PROD_HISTORIES,
         output_type='dicom',
         seed=None,
+        beam_pos_mm=best.get('beam_pos_mm'),
     )
     final = os.path.join(OUTPUT_DIR, f'optimised_{n_beams}beam_optimised.txt')
     shutil.move(tmp, final)
@@ -933,6 +986,7 @@ def main():
         print('-' * 78)
         print(f'beam params : {beam_signature(best["beam_params"])}')
         print(f'weights     : {[round(x, 4) for x in best["weights"]]}')
+        print(f'beam_pos_mm : {best.get("beam_pos_mm", 0.0):.2f} (auto, non-overlap at y={PATIENT_ENTRY_Y:.0f} mm)')
         print(f'score       : {best["score"]:.6e}')
         print(f'tumour mean : {m["tumour_mean"]:.6e}')
         print(f'tumour D95  : {m["tumour_D95"]:.6e}')
@@ -946,13 +1000,13 @@ def main():
         print(f'production  : {prod_out}')
         print(f'elapsed     : {elapsed:.1f} s')
 
-        summary.append({'n_beams': n_beams, 'beam_signature': beam_signature(best['beam_params']), 'weights': best['weights'], 'score': best['score'], 'tumour_D95': m['tumour_D95'], 'lung_r_mean': m['lung_r_mean'], 'heart_mean': m['heart_mean'], 'cord_D02': m['cord_D02']})
+        summary.append({'n_beams': n_beams, 'beam_signature': beam_signature(best['beam_params']), 'weights': best['weights'], 'beam_pos_mm': best.get('beam_pos_mm', 0.0), 'score': best['score'], 'tumour_D95': m['tumour_D95'], 'lung_r_mean': m['lung_r_mean'], 'heart_mean': m['heart_mean'], 'cord_D02': m['cord_D02']})
 
     print('\n' + '=' * 78)
     print('SUMMARY')
     print('=' * 78)
     for item in summary:
-        print(f"{item['n_beams']}-beam | params={item['beam_signature']} | weights={[round(x, 4) for x in item['weights']]} | score={item['score']:.6e} | tumour D95={item['tumour_D95']:.6e} | lung_R mean={item['lung_r_mean']:.6e} (not penalised) | heart mean={item['heart_mean']:.6e} | cord D02={item['cord_D02']:.6e}")
+        print(f"{item['n_beams']}-beam | params={item['beam_signature']} | weights={[round(x, 4) for x in item['weights']]} | beam_pos={item['beam_pos_mm']:.2f}mm | score={item['score']:.6e} | tumour D95={item['tumour_D95']:.6e} | lung_R mean={item['lung_r_mean']:.6e} (not penalised) | heart mean={item['heart_mean']:.6e} | cord D02={item['cord_D02']:.6e}")
 
     print('\nRun the production files from the project root, then inspect the DICOM dose in VICTORIA.')
 
