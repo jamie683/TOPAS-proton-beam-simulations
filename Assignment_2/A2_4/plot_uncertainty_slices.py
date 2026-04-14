@@ -71,6 +71,9 @@ PLANS = [
     ("proton 1-beam", "proton_1beam",
      os.path.join(PROJECT_ROOT, "A2_5", "output", "uncertainty",
                   "replicate_{k:02d}.csv")),
+    ("SOBP (initial narrow beam)", "sobp_initial",
+     os.path.join(PROJECT_ROOT, "A2_6", "outputs", "uncertainty_initial",
+                  "replicate_{k:02d}.csv")),
     ("SOBP",    "sobp",
      os.path.join(PROJECT_ROOT, "A2_6", "outputs", "uncertainty",
                   "replicate_{k:02d}.csv")),
@@ -257,15 +260,16 @@ def plot_plan_slice(plan_name, mean_dict, std_dict, n_rep,
     fig, axes = plt.subplots(1, 2, figsize=(13.5, 6.0),
                              constrained_layout=True)
 
-    # ---- Left panel: mean dose ---------------------------------------
+    # ---- Left panel: mean dose (% of slice max) ----------------------
     ax = axes[0]
     ax.imshow(hu_image, cmap="gray", extent=extent, origin="lower",
               vmin=-400, vmax=400, aspect="equal")
-    dose_masked = np.ma.masked_where(mean_2d < 0.05 * dose_max, mean_2d)
+    mean_pct = mean_2d / dose_max * 100.0
+    dose_masked = np.ma.masked_where(mean_pct < 5.0, mean_pct)
     im1 = ax.imshow(dose_masked, cmap="jet", extent=extent, origin="lower",
-                    alpha=0.55, vmin=0, vmax=dose_max, aspect="equal")
+                    alpha=0.55, vmin=0, vmax=100.0, aspect="equal")
     cbar1 = fig.colorbar(im1, ax=ax, pad=0.02, shrink=0.85)
-    cbar1.set_label("Mean dose (Gy)", fontsize=11)
+    cbar1.set_label("Mean dose (% of slice max)", fontsize=11)
     draw_contours(ax, contour_polys, geom)
     ax.invert_yaxis()
     ax.set_xlabel("X (mm)", fontsize=12)
