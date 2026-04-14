@@ -6,10 +6,13 @@ Re-runs the 24-beam SOBP plan produced by ``sobp_proton.py`` with
 directly from the TOPAS voxel-level dose CSVs, and aggregates replicates into
 mean ± 1σ bands.
 
-Template expected:
-    A2_6/outputs/patient_sobp_csv.txt
+Templates expected:
+    A2_6/outputs/patient_sobp_csv.txt         (final optimised beam)
+    A2_6/outputs/initial_sobp_csv.txt         (narrow beam, pre-sweep)
 
-Outputs (under ``A2_6/outputs/uncertainty/``):
+Pass ``--initial`` to run seeds for the initial narrow-beam SOBP instead.
+
+Outputs (under ``A2_6/outputs/uncertainty/`` or ``uncertainty_initial/``):
     replicate_{kk}.txt   — TOPAS input for seed k
     replicate_{kk}.csv   — TOPAS voxel dose output
     replicate_{kk}.npz   — per-replicate cached DVHs
@@ -21,8 +24,8 @@ recompute DVHs from existing CSVs without re-running TOPAS.
 
 Usage:
     python3 A2_6/run_uncertainty.py
-    python3 A2_6/run_uncertainty.py --force
-    python3 A2_6/run_uncertainty.py --rescore
+    python3 A2_6/run_uncertainty.py --initial
+    python3 A2_6/run_uncertainty.py --initial --rescore
 """
 
 import os
@@ -47,14 +50,17 @@ N_REPLICATES = 10
 HISTORIES_PER_REPLICATE = 500_000
 SEEDS = list(range(1, N_REPLICATES + 1))
 
-TEMPLATE_PATH = os.path.join(SCRIPT_DIR, "outputs", "patient_sobp_csv.txt")
-UNCERT_DIR    = os.path.join(SCRIPT_DIR, "outputs", "uncertainty")
-CT_DIR        = os.path.join(PROJECT_ROOT, "CTData")
+TEMPLATE_FINAL   = os.path.join(SCRIPT_DIR, "outputs", "patient_sobp_csv.txt")
+TEMPLATE_INITIAL = os.path.join(SCRIPT_DIR, "outputs", "initial_sobp_csv.txt")
+UNCERT_DIR       = os.path.join(SCRIPT_DIR, "outputs", "uncertainty")
+UNCERT_DIR_INIT  = os.path.join(SCRIPT_DIR, "outputs", "uncertainty_initial")
+CT_DIR           = os.path.join(PROJECT_ROOT, "CTData")
 
 STRUCTURE_KEYS = ("tumour", "ptv", "lung_r", "lung_l", "heart", "cord", "body")
 
 FORCE_FLAG   = "--force"
 RESCORE_FLAG = "--rescore"
+INITIAL_FLAG = "--initial"
 
 STRUCT_DISPLAY = {
     "tumour": "GTVp",
@@ -67,12 +73,13 @@ STRUCT_DISPLAY = {
 }
 
 
-def replicate_basename_rel(k):
-    return os.path.join("A2_6", "outputs", "uncertainty", f"replicate_{k:02d}")
+def replicate_basename_rel(k, initial=False):
+    subdir = "uncertainty_initial" if initial else "uncertainty"
+    return os.path.join("A2_6", "outputs", subdir, f"replicate_{k:02d}")
 
 
-def replicate_paths(k):
-    base_rel = replicate_basename_rel(k)
+def replicate_paths(k, initial=False):
+    base_rel = replicate_basename_rel(k, initial=initial)
     return {
         "basename_rel": base_rel,
         "txt": os.path.join(PROJECT_ROOT, base_rel + ".txt"),
@@ -81,11 +88,11 @@ def replicate_paths(k):
     }
 
 
-def generate_replicate_inputs():
-    with open(TEMPLATE_PATH, "r", encoding="utf-8") as f:
+def generate_replicate_inputs(template_path, initial=False):
+    with open(template_path, "r", encoding="utf-8") as f:
         template_text = f.read()
     for k, seed in enumerate(SEEDS):
-        paths = replicate_paths(k)
+        paths = replicate_paths(k, initial=initial)
         new_text = dvh_utils.rewrite_topas_for_replicate(
             template_text,
             seed=seed,
@@ -110,33 +117,42 @@ def build_masks():
 def main():
     force   = FORCE_FLAG   in sys.argv
     rescore = RESCORE_FLAG in sys.argv
-    os.makedirs(UNCERT_DIR, exist_ok=True)
+    initial = INITIAL_FLAG in sys.argv
+
+    template_path = TEMPLATE_INITIAL if initial else TEMPLATE_FINAL
+    uncert_dir    = UNCERT_DIR_INIT  if initial else UNCERT_DIR
+    plan_label    = "INITIAL NARROW-BEAM SOBP" if initial else "SOBP MULTI-BEAM PROTON"
+
+    os.makedirs(uncert_dir, exist_ok=True)
 
     print("=" * 78)
-    print("A2_6 — SOBP MULTI-BEAM PROTON MONTE CARLO UNCERTAINTY")
+    print(f"A2_6 — {plan_label} MONTE CARLO UNCERTAINTY")
     print("=" * 78)
     print(f"Replicates          : {N_REPLICATES}")
     print(f"Histories/replicate : {HISTORIES_PER_REPLICATE:,}")
     print(f"Seeds               : {SEEDS}")
-    print(f"Template            : {TEMPLATE_PATH}")
-    print(f"Output dir          : {UNCERT_DIR}")
+    print(f"Template            : {template_path}")
+    print(f"Output dir          : {uncert_dir}")
     if force:
         print("Mode                : FORCE (re-run TOPAS + rescore)")
     elif rescore:
         print("Mode                : RESCORE (recompute DVHs from existing CSVs)")
     print("-" * 78)
 
-    if not os.path.isfile(TEMPLATE_PATH):
-        print("Template not found. Run A2_6/sobp_proton.py first.")
+    if not os.path.isfile(template_path):
+        if initial:
+            print("Initial SOBP template not found. Re-run A2_6/sobp_proton.py first.")
+        else:
+            print("Template not found. Run A2_6/sobp_proton.py first.")
         return
 
-    generate_replicate_inputs()
+    generate_replicate_inputs(template_path, initial)
     masks = build_masks()
     centres, edges = dvh_utils.common_dose_grid()
 
     replicate_dvhs = []
     for k, seed in enumerate(SEEDS):
-        paths = replicate_paths(k)
+        paths = replicate_paths(k, initial=initial)
 
         if (not force) and (not rescore) and os.path.isfile(paths["npz"]):
             _, _, _, dvh = dvh_utils.load_replicate_npz(paths["npz"])
@@ -164,7 +180,7 @@ def main():
         print(f"plan_max={plan_dose_max:.3e} Gy")
 
     agg = dvh_utils.aggregate_replicates(replicate_dvhs, STRUCTURE_KEYS, centres)
-    agg_path = os.path.join(UNCERT_DIR, "aggregated.npz")
+    agg_path = os.path.join(uncert_dir, "aggregated.npz")
     dvh_utils.save_aggregated_npz(agg_path, centres, agg)
     print(f"\nAggregated DVHs saved: {agg_path}")
 

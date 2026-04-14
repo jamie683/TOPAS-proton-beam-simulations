@@ -2216,6 +2216,14 @@ def main():
         title=f"Initial SOBP in patient "
               f"(narrow beam: CutoffX=CutoffY={NARROW_BEAM_CUTOFF_X:.0f} mm)",
     )
+    # Keep the template for the uncertainty pipeline (run_uncertainty.py)
+    init_kept = os.path.join(OUTPUT_DIR, "initial_sobp_csv.txt")
+    import shutil
+    try:
+        shutil.copy2(init_param, init_kept)
+        print(f"  Initial SOBP template saved: {init_kept}")
+    except Exception:
+        pass
     try:
         os.remove(init_param)
     except OSError:
